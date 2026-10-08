@@ -115,8 +115,16 @@ function startRecognition() {
     if (result.isFinal) ws.send(JSON.stringify({ type: "text", text }));
   };
   // Phones stop recognition after silence or errors; keep restarting it for the whole sweep.
-  recognizer.onend = () => { if (ws.readyState === 1) setTimeout(() => { try { recognizer.start(); } catch {} }, 250); };
-  recognizer.onerror = (e) => { if (e.error === "not-allowed") addNotice("Microphone blocked: allow it, or type below."); };
+  let blocked = false;
+  recognizer.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      blocked = true;   // do not keep restarting a recogniser the user has refused
+      addNotice("Microphone blocked: allow it in the browser settings and reload, or type below.");
+    }
+  };
+  recognizer.onend = () => {
+    if (!blocked && ws.readyState === 1) setTimeout(() => { try { recognizer.start(); } catch {} }, 250);
+  };
   recognizer.start();
 }
 

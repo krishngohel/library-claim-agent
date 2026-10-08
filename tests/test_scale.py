@@ -87,13 +87,13 @@ def test_largest_reference_wins_over_small_or_mistaken_ones():
 
 def test_walls_from_views_rejects_bad_boxes_with_medians():
     # True room: ceiling 2.54 m. Door 480 px tall on a 600 px wall (door 203.2 cm).
-    good = {"wall_box": [0, 0, 600, 1100], "door_box": [120, 0, 600, 200], "w": 1000, "h": 1000}
+    good = {"wall_box": [0, 0, 600, 1100], "door_box": [120, 0, 600, 200], "w": 1000, "h": 1000}   # door 480x200 px
     views = [{**good, "wall": 1}, {**good, "wall": 1},
-             {**good, "wall": 1, "door_box": [120, 0, 400, 200]},          # bad door box (too short)
+             {**good, "wall": 1, "door_box": [120, 0, 400, 200]},          # bad door box: 280x200 px is not door-shaped
              {**good, "wall": 2, "wall_box": [0, 0, 1000, 1000]},          # full-frame box: rejected
              {**good, "wall": 2, "wall_box": [0, 0, 0, 0]},                # empty box: rejected
              {**good, "wall": 2, "wall_box": [0, 0, 600, 900], "door_box": None}]
-    walls, ceiling = scale.walls_from_views(views, 203.2)
+    walls, ceiling, spread = scale.walls_from_views(views, 203.2)
     assert ceiling == pytest.approx(2.54)
     assert walls[1][0] == pytest.approx(2.54 * 1100 / 600)
     assert walls[2][0] == pytest.approx(2.54 * 900 / 600)
@@ -101,4 +101,9 @@ def test_walls_from_views_rejects_bad_boxes_with_medians():
 
 def test_no_door_means_no_room_scale():
     view = {"wall": 1, "wall_box": [0, 0, 600, 1100], "door_box": None, "w": 1000, "h": 1000}
-    assert scale.walls_from_views([view], 203.2) == ({}, None)
+    assert scale.walls_from_views([view], 203.2) == ({}, None, 0.0)
+
+
+def test_door_shape_check():
+    assert scale.plausible_door([0, 0, 480, 200], 1000, 1000)        # 2.4 : 1, a real door
+    assert not scale.plausible_door([0, 0, 300, 220], 1000, 1000)    # 1.4 : 1, not a door

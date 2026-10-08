@@ -98,14 +98,31 @@ def plausible_wall_box(box: list[int] | None) -> bool:
     return ymax - ymin >= 100 and xmax - xmin >= 100 and box != [0, 0, 1000, 1000]
 
 
-def walls_from_views(views: list[dict], door_height_cm: float) -> tuple[dict[int, tuple[float, float]], float | None]:
+def plausible_door(box: list[int], img_w: int, img_h: int) -> bool:
+    """Interior doors are about 80 in tall and 24-36 in wide: height/width 2.2-3.3. A box far outside
+    that shape is not really the door (or is cut off), and would give a wrong scale."""
+    h_px, w_px = box_px(box, img_w, img_h)
+    return w_px > 0 and 1.9 <= h_px / w_px <= 3.6
+
+
+def spread_ratio(values: list[float]) -> float:
+    """(max - min) / median of the middle half: how much repeated estimates disagree."""
+    v = sorted(values)
+    if len(v) < 2:
+        return 0.0
+    middle = v[len(v) // 4: len(v) - len(v) // 4] or v
+    return (middle[-1] - middle[0]) / median(v)
+
+
+def walls_from_views(views: list[dict], door_height_cm: float) -> tuple[dict[int, tuple[float, float]], float | None, float]:
     """Room walls from whole-wall frames. Each view: {"wall": n, "wall_box": box, "door_box": box or None,
     "w": img_w, "h": img_h}.
 
     1. Ceiling height: in every view with a door, ceiling = wall height in px / (door height in px / door cm).
        The ceiling is the same height everywhere, so the median over all views rejects bad boxes.
     2. Each wall's width = (its median width:height ratio over its views) x the ceiling height.
-    Returns ({wall: (width_m, height_m)}, ceiling_m).
+    Returns ({wall: (width_m, height_m)}, ceiling_m, spread), where spread says how much the separate
+    ceiling estimates disagreed (0.2 = 20%).
     """
     ceilings, ratios = [], {}
     for v in views:
@@ -113,14 +130,14 @@ def walls_from_views(views: list[dict], door_height_cm: float) -> tuple[dict[int
             continue
         wall_h, wall_w = box_px(v["wall_box"], v["w"], v["h"])
         ratios.setdefault(v["wall"], []).append(wall_w / wall_h)
-        if v.get("door_box"):
+        if v.get("door_box") and plausible_door(v["door_box"], v["w"], v["h"]):
             door_h, _ = box_px(v["door_box"], v["w"], v["h"])
             if 0 < door_h < wall_h:   # a door taller than its wall is a bad box
                 ceilings.append(wall_h / (door_h / door_height_cm) / 100)
     if not ceilings:
-        return {}, None
+        return {}, None, 0.0
     ceiling = median(ceilings)
-    return {n: (median(r) * ceiling, ceiling) for n, r in ratios.items()}, ceiling
+    return {n: (median(r) * ceiling, ceiling) for n, r in ratios.items()}, ceiling, spread_ratio(ceilings)
 
 
 def room_from_walls(walls: dict[int, tuple[float, float]]) -> dict:

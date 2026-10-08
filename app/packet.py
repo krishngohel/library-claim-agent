@@ -10,6 +10,24 @@ def _amount(price: dict, key: str = "amount") -> float | None:
     return price.get(key) if price else None
 
 
+def shelf_run_m(books: list[dict]) -> float:
+    """Length of shelf the books occupy. Upright books: their thickness. Books lying flat: a stack takes
+    the length of its longest book once, however many are piled up. A stack = flat books in the same
+    frame whose boxes overlap left-to-right."""
+    run_cm = sum(b["spine_thickness_cm"] or 0 for b in books if b.get("orientation", "vertical") == "vertical")
+    flat = [b for b in books if b.get("orientation") == "flat" and b["spine_height_cm"]]
+    stacks: list[list[dict]] = []
+    for b in flat:
+        stack = next((s for s in stacks if s[0]["frame_ref"] == b["frame_ref"] and any(
+            b["box_2d"][1] < o["box_2d"][3] and o["box_2d"][1] < b["box_2d"][3] for o in s)), None)
+        if stack:
+            stack.append(b)
+        else:
+            stacks.append([b])
+    run_cm += sum(max(b["spine_height_cm"] for b in s) for s in stacks)
+    return round(run_cm / 100, 2)
+
+
 def totals(books: list[dict], items: list[dict]) -> dict:
     priced_books = [b for b in books if b["status"] != "needs_appraisal"]
     book_repl = [_amount(b["replacement_cost"]) for b in priced_books]
@@ -27,7 +45,7 @@ def totals(books: list[dict], items: list[dict]) -> dict:
         "books_identified": sum(b["status"] == "identified" for b in books),
         "books_unidentified": sum(b["status"] == "unidentified" for b in books),
         "books_needs_appraisal": sum(b["status"] == "needs_appraisal" for b in books),
-        "shelf_run_m": round(sum(b["spine_thickness_cm"] or 0 for b in books) / 100, 2),
+        "shelf_run_m": shelf_run_m(books),
         "books_without_thickness": sum(not b["spine_thickness_cm"] for b in books),
         "books_replacement_cost": round(sum(a for a in book_repl if a is not None), 2),
         "books_used_value": round(sum(a for a in book_used if a is not None), 2),
@@ -73,6 +91,7 @@ def review_queue(books: list[dict], items: list[dict], room: dict) -> list[dict]
             add(i["id"], "brand/model not legible; price is a range for similar items")
         if not i["dimensions_cm"]["w"]:
             add(i["id"], "no metric scale available; dimensions left blank")
-    if room["confidence"] < 0.6:
-        add("room", "room measurement low confidence: " + "; ".join(room.get("shape_notes", [])))
+    if room["confidence"] < 0.7 or room.get("shape_notes"):
+        add("room", f"room measurement needs a check (confidence {room['confidence']}): "
+                    + ("; ".join(room.get("shape_notes", [])) or "low confidence"))
     return queue

@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from rapidfuzz import fuzz
 
-from app import config, pipeline, quality, vision
+from app import config, pipeline, quality, scale, vision
 from app.agents import make_agent
 from app.sweep import Sweep
 
@@ -75,16 +75,22 @@ class Connection:
 
     async def from_phone(self):
         while True:
-            msg = json.loads(await self.ws.receive_text())
-            if msg["type"] == "audio":
-                await self.agent.audio(base64.b64decode(msg["data"]))
-            elif msg["type"] == "frame":
-                await self.on_frame(base64.b64decode(msg["data"]))
-            elif msg["type"] == "text":   # typed text, or speech recognised on the phone
-                await self.send(type="transcript", speaker="user", text=msg["text"] + " ")
-                await self.agent.user_text(msg["text"])
-            elif msg["type"] == "hello":
-                self.sweep.device = msg.get("device", "")[:200]
+            raw = await self.ws.receive_text()
+            try:
+                msg = json.loads(raw)
+                kind = msg.get("type")
+                if kind == "audio":
+                    await self.agent.audio(base64.b64decode(msg["data"]))
+                elif kind == "frame":
+                    await self.on_frame(base64.b64decode(msg["data"]))
+                elif kind == "text" and str(msg.get("text", "")).strip():   # typed, or speech recognised on the phone
+                    text = str(msg["text"]).strip()[:2000]
+                    await self.send(type="transcript", speaker="user", text=text + " ")
+                    await self.agent.user_text(text)
+                elif kind == "hello":
+                    self.sweep.device = str(msg.get("device", ""))[:200]
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:   # one bad message must not end the sweep
+                log.warning("ignored malformed message from phone: %r", exc)
 
     async def on_frame(self, jpeg: bytes):
         sharpness, glare = quality.measure(jpeg)
@@ -99,6 +105,15 @@ class Connection:
     # ---------- tools (called by either agent) ----------
 
     async def execute_tool(self, name: str, args: dict) -> dict:
+        try:
+            result = await self._run_tool(name, args)
+        except Exception as exc:   # a bug in one tool must not end the conversation
+            log.exception("tool %s failed", name)
+            result = {"error": f"{name} failed: {exc}"}
+        await self.send(type="tool", name=name, args=args, result=result)
+        return result
+
+    async def _run_tool(self, name: str, args: dict) -> dict:
         if name == "set_segment":
             result = self.set_segment(args)
         elif name == "record_statement":
@@ -114,13 +129,23 @@ class Connection:
             result = await self.end_sweep(bool(args.get("force")))
         else:
             result = {"error": "unknown tool"}
-        await self.send(type="tool", name=name, args=args, result=result)
         return result
+
+    WALL_WORDS = {"ONE": "1", "TWO": "2", "THREE": "3", "FOUR": "4", "FIRST": "1", "SECOND": "2", "THIRD": "3",
+                  "FOURTH": "4"}
 
     def set_segment(self, args) -> dict:
         previous = self.sweep.current_segment
-        label = str(args.get("label", "")).strip().upper()
-        new = f"wall_{label}" if args.get("kind") == "wall" else f"shelf_{label}"
+        label = "".join(ch for ch in str(args.get("label", "")).upper() if ch.isalnum())
+        if args.get("kind") == "wall":
+            label = self.WALL_WORDS.get(label, label)
+            if label not in ("1", "2", "3", "4"):
+                return {"error": "wall label must be 1, 2, 3 or 4 (clockwise from the door)"}
+            new = f"wall_{label}"
+        else:
+            if not label:
+                return {"error": "shelf label must be a letter such as A"}
+            new = f"shelf_{label}"
         self.sweep.current_segment = new
         if new.startswith("shelf_"):
             self.sweep.shelf_books.pop(new, None)   # re-filming a shelf: its old merge is out of date
@@ -154,10 +179,14 @@ class Connection:
             await self.notice(f"{shelf} logged: {len(books)} books, {unreadable} unreadable.", force=True)
 
     async def end_sweep(self, force: bool) -> dict:
+        if self.finishing:
+            return {"error": "already building the packet"}
+        current = self.sweep.current_segment
+        if current.startswith("shelf_") and current not in self.sweep.shelf_books:
+            await self.close_shelf(current)   # the shelf they are standing at has not been merged yet
         gaps = []
         for n in "1234":
-            frames = pipeline.scanned_frames(self.sweep, f"wall_{n}")
-            if not any(self.sweep.scans[f.ref]["wall_box"] for f in frames):
+            if not self.wall_captures(f"wall_{n}"):
                 gaps.append(f"wall {n}: never captured as a whole wall (needed for room size)")
         filmed = {f.segment for f in self.sweep.frames if f.segment.startswith("shelf_")}
         for shelf in filmed:
@@ -172,14 +201,23 @@ class Connection:
                 gaps.append(f"{shelf}: {unreadable} of {len(books)} spines unreadable")
         if gaps and not force:
             return {"ready": False, "gaps": gaps}
-        if self.finishing:
-            return {"error": "already building the packet"}
         self.finishing = True
         self.sweep.ended_at = time.time()
         await self.send(type="processing")
         await asyncio.gather(*[t for t in self.background if not t.done() and t is not asyncio.current_task()],
                              return_exceptions=True)   # let in-flight scans and shelf merges land first
-        packet = await pipeline.finish_sweep(self.sweep)
+        # The build runs as its own task: if the phone hangs up and the agent's turn is cancelled,
+        # shield() keeps the build going and the packet is still written to disk.
+        build = asyncio.create_task(pipeline.finish_sweep(self.sweep))
+        self.background.add(build)
+        try:
+            packet = await asyncio.shield(build)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("packet build failed")
+            self.finishing, self.sweep.ended_at = False, None   # let them keep filming and try again
+            return {"ready": False, "error": f"building the packet failed ({exc}); ask them to try again"}
         t = packet["totals"]
         await self.send(type="packet", url=f"/sweeps/{self.sweep.id}/report.html",
                         json_url=f"/sweeps/{self.sweep.id}/claim_packet.json", totals=t)
@@ -203,8 +241,11 @@ class Connection:
     # ---------- live scanning ----------
 
     async def scan_loop(self):
-        while not self.finishing:
-            await asyncio.sleep(config.SCAN_EVERY_SECONDS)
+        while True:
+            on_wall = self.sweep.current_segment.startswith("wall_")
+            await asyncio.sleep(config.WALL_SCAN_EVERY_SECONDS if on_wall else config.SCAN_EVERY_SECONDS)
+            if self.finishing:
+                continue
             new = [f for i, f in enumerate(self.sweep.frames) if i > self.last_scanned
                    and quality.problem(f.sharpness, f.glare) is None and f.segment != "start"]
             if not new:
@@ -228,17 +269,18 @@ class Connection:
 
     async def coach_wall(self, frame, scan):
         """Wall views are for measuring the room: we need the whole wall in frame."""
-        if self.wall_done(frame.segment):
+        if self.wall_captures(frame.segment) > 1:   # already have it; stop coaching this wall
             return
-        if scan["wall_box"] is None:
+        if not scale.plausible_wall_box(scan["wall_box"]):
             await self.notice(f"{frame.segment}: the whole wall is not in view (need both corners, the floor line and "
                               "the ceiling line). Ask them to step back or turn until it all fits.")
         else:
             await self.notice(f"{frame.segment} captured for room measurement. They can move on.", force=True)
 
-    def wall_done(self, segment: str) -> bool:
-        """True once a frame of this wall has already captured the whole wall."""
-        return sum(1 for f in pipeline.scanned_frames(self.sweep, segment) if self.sweep.scans[f.ref]["wall_box"]) > 1
+    def wall_captures(self, segment: str) -> int:
+        """How many frames of this wall show the whole wall (same test the room maths uses)."""
+        return sum(1 for f in pipeline.scanned_frames(self.sweep, segment)
+                   if scale.plausible_wall_box(self.sweep.scans[f.ref]["wall_box"]))
 
     async def coach_shelf(self, frame, scan):
         unreadable = sum(not s["legible"] for s in scan["spines"])

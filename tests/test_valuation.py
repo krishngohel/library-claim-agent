@@ -56,3 +56,9 @@ def test_user_statement_sends_book_to_appraisal():
     statements = [{"kind": "first_edition", "about": "the hobbit", "quote": "that's a first edition"}]
     assert valuation.appraisal_reasons({"title": "The Hobbit"}, statements)
     assert not valuation.appraisal_reasons({"title": "Dune"}, statements)
+
+
+def test_short_titles_need_the_author():
+    offers = [offer("Gemma's Kitchen Cookbook", 9), offer("Emma by Jane Austen, paperback", 7), offer("Emma: A Novel", 8)]
+    kept = [o["title"] for o in valuation.matching(offers, "Emma", "Jane Austen")]
+    assert kept == ["Emma by Jane Austen, paperback", "Emma: A Novel"]

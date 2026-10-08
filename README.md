@@ -150,7 +150,10 @@ and read all of it before writing this.
 - **Room shape:** walls 1 and 3 face each other, as do 2 and 4. If opposite walls differ by more
   than 15%, the room is flagged as possibly non-rectangular and the mean is used. Wall area is gross
   (doors and windows not subtracted). "Shelved wall area" is the summed front area of detected shelving.
-- **Item depth** can't be seen from the front, so it is reported as 0, meaning unknown.
+- **Item depth** can't be seen from the front, so it is reported as `null`, meaning unknown.
+- **Room shape:** the sweep expects four walls, numbered clockwise from the door. An L-shaped or angled room
+  shows up as opposite walls that disagree. The packet then reports the mean, lowers the confidence and puts
+  the room in the review queue rather than guessing a shape.
 
 ## Tools used
 

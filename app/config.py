@@ -86,6 +86,7 @@ PRICE_CLAUDE_OUT = float(os.getenv("PRICE_CLAUDE_OUT", "0.50"))   # USD per 1M o
 PRICE_SERPAPI_CALL = float(os.getenv("PRICE_SERPAPI_CALL", "0.015"))
 
 SCAN_EVERY_SECONDS = 2.5
+WALL_SCAN_EVERY_SECONDS = 1.0   # wall views are short and the room maths needs several samples per wall
 # Frames given to the model when merging one shelf. A 60 s shelf pass gives ~24 scans; using fewer
 # would leave gaps between frames and miss books.
 SHELF_MERGE_MAX_FRAMES = 24  # how often a sharp frame is sent to the vision model during the sweep

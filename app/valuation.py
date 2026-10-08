@@ -10,6 +10,8 @@ Fallbacks, in order: local market -> other market converted at the ECB rate (lab
 converted=true) -> no price (amount null, excluded from totals, sent to review).
 """
 
+import re
+
 from rapidfuzz import fuzz
 
 from app import config, prices
@@ -24,20 +26,35 @@ def median_listing(offers: list[dict]) -> dict | None:
     return ordered[(len(ordered) - 1) // 2]   # lower median: always a real listing
 
 
-def matching(offers: list[dict], title: str) -> list[dict]:
-    """Keep only listings whose title clearly contains the book title (drops study guides, box sets, etc.)."""
-    return [o for o in offers if fuzz.partial_ratio(title.lower(), o["title"].lower()) >= 85]
+def matching(offers: list[dict], title: str, author: str = "") -> list[dict]:
+    """Keep only listings whose title clearly contains the book title (drops study guides, box sets, etc.).
+
+    A short title like "Emma" also appears inside unrelated listings ("Gemma's Kitchen"), so for short
+    titles the author's surname must be in the listing too."""
+    surname = author.split(",")[0].strip().split(" ")[-1].lower() if author.strip() else ""
+    out = []
+    for o in offers:
+        listing = o["title"].lower()
+        if fuzz.partial_ratio(title.lower(), listing) < 85:
+            continue
+        whole_word = r"(?![a-z0-9])"   # the next character is not a letter or digit
+        starts_with_title = re.match(re.escape(title.lower()) + whole_word, listing) is not None
+        has_surname = bool(surname) and re.search(r"(?<![a-z0-9])" + re.escape(surname) + whole_word, listing) is not None
+        if len(title) < 12 and not has_surname and not starts_with_title:
+            continue
+        out.append(o)
+    return out
 
 
 def other_market(country: str) -> str:
     return "GB" if country != "GB" else "US"
 
 
-async def _find(sweep, query: str, title: str, country: str) -> tuple[dict | None, dict | None]:
+async def _find(sweep, query: str, title: str, author: str, country: str) -> tuple[dict | None, dict | None]:
     """(median new listing, median used listing) in one country, or None for each."""
-    shop = matching(await prices.shopping_offers(sweep, query, country), title)
-    new = [o for o in shop if not o["used"]] + matching(await prices.ebay_offers(sweep, query, country, "NEW"), title)
-    used = [o for o in shop if o["used"]] + matching(await prices.ebay_offers(sweep, query, country, "USED"), title)
+    shop = matching(await prices.shopping_offers(sweep, query, country), title, author)
+    new = [o for o in shop if not o["used"]] + matching(await prices.ebay_offers(sweep, query, country, "NEW"), title, author)
+    used = [o for o in shop if o["used"]] + matching(await prices.ebay_offers(sweep, query, country, "USED"), title, author)
     return median_listing(new), median_listing(used)
 
 
@@ -56,9 +73,9 @@ async def _convert(listing: dict | None, to_ccy: str) -> dict | None:
 async def price_book(sweep, book: dict, country: str, currency: str) -> tuple[dict, dict]:
     """Return (replacement_cost, used_value) in the packet's format. amount=None means no price found."""
     query = book["isbn"] or f"{book['title']} {book['author'].split(',')[0]} book".strip()
-    new, used = await _find(sweep, query, book["title"], country)
+    new, used = await _find(sweep, query, book["title"], book["author"], country)
     if new is None or used is None:   # fill only the missing side from the other market
-        other_new, other_used = await _find(sweep, query, book["title"], other_market(country))
+        other_new, other_used = await _find(sweep, query, book["title"], book["author"], other_market(country))
         new = new or await _convert(other_new, currency)
         used = used or await _convert(other_used, currency)
 

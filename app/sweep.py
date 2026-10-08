@@ -39,8 +39,9 @@ class Sweep:
     skipped_segments: list[str] = field(default_factory=list)  # user said "not mine"
     shelf_books: dict[str, list[dict]] = field(default_factory=dict)  # shelf -> consolidated spines
     transcript: list[dict] = field(default_factory=list)
-    usage: dict[str, int] = field(default_factory=lambda: {"vision_in": 0, "vision_out": 0, "claude_in": 0, "claude_out": 0, "live_in": 0, "live_out": 0, "serpapi": 0, "ebay": 0})
+    usage: dict[str, int] = field(default_factory=lambda: {"vision_in": 0, "vision_out": 0, "claude_in": 0, "claude_cache_write": 0, "claude_cache_read": 0, "claude_out": 0, "live_in": 0, "live_out": 0, "serpapi": 0, "ebay": 0})
     stage_seconds: dict[str, float] = field(default_factory=dict)
+    warnings: list[dict] = field(default_factory=list)   # pipeline steps that failed, shown in the review queue
 
     @property
     def dir(self) -> Path:

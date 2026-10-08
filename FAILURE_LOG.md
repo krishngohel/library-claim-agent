@@ -79,13 +79,24 @@ log above.
   wreck a wall. **Fix** (`scale.walls_from_views`): reject impossible boxes, take ceiling height as the
   median over all door views (it is the same everywhere in a room), and make each wall's width its own
   width:height ratio × that ceiling.
-- **Measured:** floor area error went from 27.0% to **2.1%** on that sweep, and to **6.6%** on a second
-  saved sweep (bar 10%). Re-running gives the same result.
-- **Still failing:** wall area is 17.8–21.5% off (bar 15%). The model puts the wall's top edge at the top of
-  the image instead of the ceiling line, about 7% too tall. In each wall's width that error cancels: width =
-  (wall px ÷ door px) × door cm, so the wall height drops out. Ceiling height keeps the error, and wall area
-  = perimeter × ceiling height. With two more weeks: find the ceiling and floor lines with an edge detector
-  (Hough lines) instead of the model's box.
+- **Root cause 3:** some door boxes have an impossible shape. The same door came back at a height:width
+  ratio of 1.4, but real interior doors are 2.2-3.3. **Fix:** door boxes outside 1.9-3.6 are ignored,
+  walls are scanned every 1 s instead of 2.5 s for more samples, and when ceiling estimates disagree by
+  more than 15% the room is flagged with the measured disagreement.
+- **Measured across 5 synthetic sweeps** (all scored, not just the good ones):
+
+  | Sweep | Floor area error (bar 10%) | Wall area error (bar 15%) | Flagged for review |
+  |---|---|---|---|
+  | 1 | 3.8% | 18.3% | yes (17% disagreement) |
+  | 2 | 14.9% | 1.8% | yes (15%) |
+  | 3 | 4.9% | 21.1% | yes (23%) |
+  | 4 | 1.1% | 8.3% | yes (17%) |
+  | 5 (1 s wall scans) | 10.4% | 5.8% | yes (20%) |
+
+  Floor area passes in 3 of 5 runs and wall area in 3 of 5. Every run was flagged with the disagreement
+  quantified, so no miss goes out silently. The limit is box accuracy from a general vision model. With two
+  more weeks: fit the floor and ceiling lines and the door edges with OpenCV (Hough lines) inside the
+  model's rough box, or use WebXR depth on Android.
 
 ### D. Requirement checks: bugs found by the contract and pricing-flow tests
 - **A book flagged for appraisal still carried its price.** Books listed above `APPRAISAL_THRESHOLD` were
@@ -99,8 +110,28 @@ log above.
   small. Merging now keeps the whole-wall sighting for measurement, and objects in a wall view get scale
   from the wall's own floor-to-ceiling height.
 
+### E. Robustness bugs found by reading the code (no test run had hit them yet)
+- **The agent trimmed its history to save tokens.** Claude Haiku 5.5 rejects a history whose earlier turns
+  were changed, so a long real sweep would have failed with a 400 once it passed 40 messages. History is
+  now append-only, and prompt caching keeps it cheap: 84k of 190k input tokens came from cache, and cost
+  per sweep fell from $0.027 to $0.019.
+- **One API error ended the sweep.** An overloaded response or network blip crashed the agent loop. Turns
+  now fail softly and the conversation continues.
+- **A reply cut off mid tool call left the tool unanswered,** which makes the next request invalid. Every
+  tool call now gets a result.
+- **Hanging up during the build cancelled it.** The packet build now runs in a shielded task, so it
+  finishes and is written to disk. A failed build can be retried instead of leaving the sweep stuck.
+- **One failed shelf or wall merge sank the whole packet.** Each segment now fails on its own, and the
+  failure is listed first in the review queue.
+- **Short titles matched the wrong listings.** "Emma" matched "Gemma's Kitchen". Short titles now need a
+  whole-word match or the author's surname in the listing.
+- **Shelf run counted every book in a flat stack.** A stack now counts once, at its longest book.
+- **Smaller fixes:** wall label "one" crashed the room maths later (now validated), one malformed phone
+  message ended the session, a refused microphone made recognition restart forever, the last shelf skipped
+  the unreadable-spines check, and a room flagged as non-rectangular stayed out of the review queue.
+
 ### Smoke-test cost and latency (Claude mode, measured)
-- Total model cost per 3-minute sweep: **$0.027** (Claude Haiku 5.5: agent turns + about 20 frame scans + merges)
+- Total model cost per 3-minute sweep: **$0.019-0.026** (Claude Haiku 5.5: agent turns + frame scans + merges; prompt caching on)
 - Sweep end to packet: **7–13 s** (books_consolidate 3.6 s, books_identify 0.1 s with cache / 2.4 s cold,
   items_consolidate 4.5–9 s, measure 0.1 s, price 0 s with no price keys)
 

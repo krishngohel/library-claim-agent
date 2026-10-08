@@ -94,3 +94,25 @@ def test_finish_sweep_writes_contract_packet(tmp_path, monkeypatch):
 
     # The saved state can be reloaded for offline replay.
     assert len(Sweep.load_state(sweep.id).frames) == len(sweep.frames)
+
+
+def test_one_failed_shelf_does_not_sink_the_packet(tmp_path, monkeypatch):
+    sweep = make_sweep(tmp_path, monkeypatch)
+
+    async def broken(sw, shelf, frames):
+        raise ValueError("vision model returned no usable ShelfBooks")
+
+    async def no_items(sw, frames):
+        return []
+
+    async def no_offers(*a, **k):
+        return []
+
+    monkeypatch.setattr(vision, "consolidate_shelf", broken)
+    monkeypatch.setattr(vision, "consolidate_items", no_items)
+    monkeypatch.setattr(pipeline.valuation.prices, "shopping_offers", no_offers)
+    monkeypatch.setattr(pipeline.valuation.prices, "ebay_offers", no_offers)
+    packet = asyncio.run(pipeline.finish_sweep(sweep))
+    assert packet["review_queue"][0]["ref_id"] == "shelf_A"
+    assert "missing from this packet" in packet["review_queue"][0]["reason"]
+    assert packet["room"]["floor_area_m2"]            # the rest of the packet was still built

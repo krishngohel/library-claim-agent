@@ -49,11 +49,23 @@ def shelf_segments(sweep) -> list[str]:
     return sorted(segments - set(sweep.skipped_segments))
 
 
+async def safely(sweep, segment: str, coro, empty):
+    """Run one segment's model step; if it fails, record a warning for the review queue and use `empty`,
+    so one bad shelf or wall cannot sink the whole packet."""
+    try:
+        return await coro
+    except Exception as exc:
+        sweep.warnings.append({"ref_id": segment, "reason": f"{segment} could not be processed ({exc}); its contents "
+                                                            "are missing from this packet - re-run scripts/replay.py"})
+        return empty
+
+
 async def consolidate_all_shelves(sweep) -> None:
     todo = [s for s in shelf_segments(sweep) if s not in sweep.shelf_books]
     results = await vision.gather_limited(
-        [vision.consolidate_shelf(sweep, s, spread(scanned_frames(sweep, s), config.SHELF_MERGE_MAX_FRAMES)) for s in todo])
-    sweep.shelf_books.update(dict(zip(todo, results)))
+        [safely(sweep, s, vision.consolidate_shelf(sweep, s, spread(scanned_frames(sweep, s), config.SHELF_MERGE_MAX_FRAMES)), [])
+         for s in todo])
+    sweep.shelf_books.update({s: r for s, r in zip(todo, results) if not any(w["ref_id"] == s for w in sweep.warnings)})
 
 
 def scanned_frames(sweep, segment: str | None = None) -> list:
@@ -145,8 +157,11 @@ def measure_room(sweep) -> dict:
         if scale.plausible_wall_box(scan["wall_box"]):
             frames_used.setdefault(f.segment, []).append(f.ref)
 
-    per_wall, ceiling = scale.walls_from_views(views, door_cm)
+    per_wall, ceiling, spread = scale.walls_from_views(views, door_cm)
     room = scale.room_from_walls(per_wall)
+    if spread > 0.15:   # repeated estimates disagree: say so instead of hiding it
+        room["shape_notes"].append(f"ceiling estimates from different frames disagree by {spread:.0%}")
+        room["confidence"] = round(max(room["confidence"] - 0.2, 0.1), 2)
     room.update(
         ceiling_m=ceiling,
         floor_area_ft2=scale.m2_to_ft2(room["floor_area_m2"]) if room["floor_area_m2"] else None,
@@ -177,7 +192,7 @@ async def consolidate_items(sweep) -> list[dict]:
     """
     segments = sorted({f.segment for f in scanned_frames(sweep)} - {"start"} - set(sweep.skipped_segments))
     per_segment = await vision.gather_limited(
-        [vision.consolidate_items(sweep, spread(scanned_frames(sweep, s), 8)) for s in segments])
+        [safely(sweep, s, vision.consolidate_items(sweep, spread(scanned_frames(sweep, s), 8)), []) for s in segments])
     sightings = [{**item, "segment": seg} for seg, items in zip(segments, per_segment) for item in items]
     return merge_across_segments([i for i in sightings if is_contents(i)])
 
@@ -359,7 +374,7 @@ def build_packet(sweep, room, books, items, country, currency) -> dict:
         "books": books,
         "items": items,
         "totals": totals(books, items),
-        "review_queue": review_queue(books, items, room),
+        "review_queue": sweep.warnings + review_queue(books, items, room),
         "metrics": {"vision_provider": config.VISION_PROVIDER, "stage_seconds": sweep.stage_seconds, "usage": sweep.usage, "cost_usd": cost_usd(sweep)},
     }
 
@@ -368,7 +383,10 @@ def cost_usd(sweep) -> dict:
     u = sweep.usage
     parts = {
         "vision": (u["vision_in"] * config.PRICE_VISION_IN + u["vision_out"] * config.PRICE_VISION_OUT) / 1e6,
-        "claude_vision": (u["claude_in"] * config.PRICE_CLAUDE_IN + u["claude_out"] * config.PRICE_CLAUDE_OUT) / 1e6,
+        # agent + vision. Cache writes bill at 1.25x input, cache reads at 0.1x.
+        "claude": (u["claude_in"] * config.PRICE_CLAUDE_IN + u.get("claude_cache_write", 0) * config.PRICE_CLAUDE_IN * 1.25
+                   + u.get("claude_cache_read", 0) * config.PRICE_CLAUDE_IN * 0.1
+                   + u["claude_out"] * config.PRICE_CLAUDE_OUT) / 1e6,
         "live": (u["live_in"] * config.PRICE_LIVE_IN + u["live_out"] * config.PRICE_LIVE_OUT) / 1e6,
         "serpapi": u["serpapi"] * config.PRICE_SERPAPI_CALL,
         "ebay": 0.0,

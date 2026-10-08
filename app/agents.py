@@ -12,6 +12,8 @@ import asyncio
 import base64
 import logging
 
+import anthropic
+
 from app import config, live, vision
 
 log = logging.getLogger("agents")
@@ -153,38 +155,46 @@ class ClaudeAgent:
             batch = [first]
             while not self.inbox.empty():   # several notices queued while we were busy -> one turn
                 batch.append(self.inbox.get_nowait())
-            await self.turn("\n".join(batch))
+            try:
+                await self.turn("\n".join(batch))
+            except anthropic.APIError as exc:   # the SDK already retried; keep the sweep alive regardless
+                log.warning("agent turn failed: %r", exc)
+                await self.conn.send(type="say", text="Sorry, I lost my connection for a moment. Keep going.")
 
     async def turn(self, text: str):
-        """One user turn: call Claude, run any tools it asks for, repeat until it answers in words."""
+        """One user turn: call Claude, run any tools it asks for, repeat until it answers in words.
+
+        The history is append-only: nothing is ever removed or edited. Current Claude models reject a
+        history whose earlier turns were changed (the "history-editing check"), so instead of trimming
+        old turns we let prompt caching make the repeated history cheap (cache reads cost ~10%).
+        """
         self.messages.append({"role": "user", "content": text})
         while True:
             response = await self.client.messages.create(
-                model=config.CLAUDE_AGENT_MODEL, max_tokens=2000, system=self.system,
-                tools=CLAUDE_TOOLS, messages=self.trimmed(), output_config={"effort": "low"})
-            self.conn.sweep.usage["claude_in"] += response.usage.input_tokens
-            self.conn.sweep.usage["claude_out"] += response.usage.output_tokens
+                model=config.CLAUDE_AGENT_MODEL, max_tokens=4000, system=self.system, tools=CLAUDE_TOOLS,
+                messages=self.messages, output_config={"effort": "low"}, cache_control={"type": "ephemeral"})
+            usage = response.usage
+            self.conn.sweep.usage["claude_in"] += usage.input_tokens
+            self.conn.sweep.usage["claude_cache_write"] += usage.cache_creation_input_tokens or 0
+            self.conn.sweep.usage["claude_cache_read"] += usage.cache_read_input_tokens or 0
+            self.conn.sweep.usage["claude_out"] += usage.output_tokens
             self.messages.append({"role": "assistant", "content": response.content})
 
+            if response.stop_reason == "refusal":
+                await self.conn.send(type="say", text="I can't help with that one. Let's carry on with the sweep.")
+                return
             spoken = " ".join(b.text for b in response.content if b.type == "text").strip()
             if spoken:
                 await self.conn.send(type="say", text=spoken)
                 await self.conn.send(type="transcript", speaker="agent", text=spoken + " ")
 
+            # Every tool call must get a result, even if the reply was cut off, or the next request is invalid.
             calls = [b for b in response.content if b.type == "tool_use"]
-            if response.stop_reason != "tool_use" or not calls:
+            if not calls:
                 return
             results = await asyncio.gather(*(self.conn.execute_tool(c.name, dict(c.input)) for c in calls))
             self.messages.append({"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": c.id, "content": str(r)} for c, r in zip(calls, results)]})
-
-    def trimmed(self, keep: int = 40) -> list[dict]:
-        """Recent history only, to keep each call cheap. Always start on a plain user message,
-        never on a tool_result (which would point to a tool call we dropped)."""
-        recent = self.messages[-keep:]
-        while recent and not (recent[0]["role"] == "user" and isinstance(recent[0]["content"], str)):
-            recent = recent[1:]
-        return recent
 
 
 def make_agent(conn):

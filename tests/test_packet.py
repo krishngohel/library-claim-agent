@@ -89,3 +89,16 @@ def test_separately_asked_art_never_merges():
     from app.pipeline import merge_across_segments
     art = {"category": "art", "description": "framed print", "segment": "wall_1", "box_2d": [0, 0, 100, 100]}
     assert len(merge_across_segments([{**art, "art_id": "ART1"}, {**art, "art_id": "ART2"}])) == 2
+
+
+def test_shelf_run_counts_a_flat_stack_once():
+    from app.packet import shelf_run_m
+    upright = [{"orientation": "vertical", "spine_height_cm": 22, "spine_thickness_cm": 3, "frame_ref": "f1", "box_2d": [0, 0, 1, 1]}] * 2
+    stack = [{"orientation": "flat", "spine_height_cm": h, "spine_thickness_cm": 3, "frame_ref": "f1",
+              "box_2d": [y, 200, y + 30, 200 + h * 10]} for y, h in ((500, 20), (530, 24), (560, 22))]
+    assert shelf_run_m(upright + stack) == 0.30   # 3 + 3 cm upright + 24 cm for the whole stack
+
+
+def test_flagged_room_shape_goes_to_review():
+    queue = review_queue([], [], {"confidence": 0.6, "shape_notes": ["opposite walls differ by >15%"]})
+    assert queue and queue[0]["ref_id"] == "room"
