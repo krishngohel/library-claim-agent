@@ -13,6 +13,7 @@ import base64
 import logging
 
 import anthropic
+from google.genai import types
 
 from app import config, live, vision
 
@@ -28,10 +29,8 @@ class GeminiAgent:
         self._cm = None
 
     async def __aenter__(self):
-        from google.genai import types
-        self.types = types
         self._cm = vision.client().aio.live.connect(
-            model=config.LIVE_MODEL, config=live.live_config(self.conn.sweep.country, self.conn.sweep.currency))
+            model=config.LIVE_MODEL, config=live.gemini_live_config(self.conn.sweep.country, self.conn.sweep.currency))
         self.session = await self._cm.__aenter__()
         await self.session.send_realtime_input(text="[APP NOTICE] The user has connected. Greet them.")
         return self
@@ -40,10 +39,10 @@ class GeminiAgent:
         await self._cm.__aexit__(*exc)
 
     async def audio(self, pcm: bytes):
-        await self.session.send_realtime_input(audio=self.types.Blob(data=pcm, mime_type="audio/pcm;rate=16000"))
+        await self.session.send_realtime_input(audio=types.Blob(data=pcm, mime_type="audio/pcm;rate=16000"))
 
     async def frame(self, jpeg: bytes):
-        await self.session.send_realtime_input(video=self.types.Blob(data=jpeg, mime_type="image/jpeg"))
+        await self.session.send_realtime_input(video=types.Blob(data=jpeg, mime_type="image/jpeg"))
 
     async def user_text(self, text: str):
         await self.session.send_realtime_input(text=text)
@@ -53,7 +52,7 @@ class GeminiAgent:
 
     async def run(self):
         """Forward Gemini's voice and transcripts to the phone; run tool calls in the background."""
-        types, conn = self.types, self.conn
+        conn = self.conn
         while True:
             async for response in self.session.receive():
                 if response.usage_metadata:
@@ -77,39 +76,14 @@ class GeminiAgent:
 
     async def _tool(self, call):
         result = await self.conn.execute_tool(call.name, dict(call.args or {}))
-        scheduling = (self.types.FunctionResponseScheduling.INTERRUPT if call.name == "end_sweep"
-                      else self.types.FunctionResponseScheduling.WHEN_IDLE)
+        scheduling = (types.FunctionResponseScheduling.INTERRUPT if call.name == "end_sweep"
+                      else types.FunctionResponseScheduling.WHEN_IDLE)
         try:
             await self.session.send_tool_response(function_responses=[
-                self.types.FunctionResponse(id=call.id, name=call.name, response=result, scheduling=scheduling)])
+                types.FunctionResponse(id=call.id, name=call.name, response=result, scheduling=scheduling)])
         except Exception:
             log.warning("could not return %s result (live session closed?)", call.name)
 
-
-# Same four tools as app/live.py, written as Anthropic tool definitions.
-CLAUDE_TOOLS = [
-    {"name": "set_segment",
-     "description": "Tell the inventory system what the camera is pointed at now, so frames are filed correctly.",
-     "input_schema": {"type": "object", "required": ["kind", "label"], "properties": {
-         "kind": {"type": "string", "enum": ["wall", "shelf"],
-                  "description": "wall = whole wall view, shelf = close pass along a shelving unit"},
-         "label": {"type": "string", "description": "Wall number 1-4, or shelf letter A, B, C ..."}}}},
-    {"name": "record_statement",
-     "description": "Record something the policyholder said that the camera cannot show.",
-     "input_schema": {"type": "object", "required": ["kind", "about", "quote"], "properties": {
-         "kind": {"type": "string", "enum": ["first_edition", "signed", "rare", "is_print", "is_original",
-                                             "skip_current_segment", "other"]},
-         "about": {"type": "string", "description": "Book title or item description it is about. Empty for skip_current_segment."},
-         "quote": {"type": "string", "description": "What the user said, close to their words"}}}},
-    {"name": "set_locale",
-     "description": "Change the policyholder's country. Currency follows the country.",
-     "input_schema": {"type": "object", "required": ["country"], "properties": {
-         "country": {"type": "string", "enum": list(config.LOCALES)}}}},
-    {"name": "end_sweep",
-     "description": "The user says they are finished. Checks coverage, then builds the claim packet (takes a few minutes).",
-     "input_schema": {"type": "object", "properties": {
-         "force": {"type": "boolean", "description": "true = build the packet even if there are gaps"}}}},
-]
 
 BROWSER_VOICE_NOTE = """
 In this mode you cannot see the camera yourself. You hear the user as text from their phone's speech
@@ -171,7 +145,7 @@ class ClaudeAgent:
         self.messages.append({"role": "user", "content": text})
         while True:
             response = await self.client.messages.create(
-                model=config.CLAUDE_AGENT_MODEL, max_tokens=4000, system=self.system, tools=CLAUDE_TOOLS,
+                model=config.CLAUDE_AGENT_MODEL, max_tokens=4000, system=self.system, tools=live.TOOLS,
                 messages=self.messages, output_config={"effort": "low"}, cache_control={"type": "ephemeral"})
             usage = response.usage
             self.conn.sweep.usage["claude_in"] += usage.input_tokens

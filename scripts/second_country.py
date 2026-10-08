@@ -18,7 +18,7 @@ from app.sweep import Sweep
 async def compare(sweep_id: str, country: str) -> list[dict]:
     sweep = Sweep.load_state(sweep_id)
     packet = json.loads((sweep.dir / "claim_packet.json").read_text(encoding="utf-8"))
-    currency = config.LOCALES[country][0]
+    currency = config.LOCALES[country]["currency"]
     books = [b for b in packet["books"] if b["status"] == "identified"][:10]
     rows = []
     for b in books:

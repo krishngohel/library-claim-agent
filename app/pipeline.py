@@ -101,7 +101,7 @@ def frame_scale(sweep, frame, door_cm: float, books_by_frame: dict) -> tuple[flo
 
 
 def measure_books(sweep, books: list[dict]) -> None:
-    door_cm = config.LOCALES[sweep.country][3]
+    door_cm = config.LOCALES[sweep.country]["door_cm"]
     by_frame = {}
     for b in books:
         by_frame.setdefault(b["frame_ref"], []).append(b)
@@ -130,7 +130,7 @@ def measure_books(sweep, books: list[dict]) -> None:
 def measure_items(sweep, items: list[dict], ceiling_m: float | None) -> None:
     """Item size from its chosen frame. Scale: a reference object in that frame; else, in a whole-wall view,
     the wall's own floor-to-ceiling height (the measured ceiling height, the same on every wall)."""
-    door_cm = config.LOCALES[sweep.country][3]
+    door_cm = config.LOCALES[sweep.country]["door_cm"]
     for it in items:
         frame = sweep.frame(it["frame_ref"])
         px, method = frame_scale(sweep, frame, door_cm, {})
@@ -144,7 +144,7 @@ def measure_items(sweep, items: list[dict], ceiling_m: float | None) -> None:
 
 def measure_room(sweep) -> dict:
     """Room size from the whole-wall frames (segments wall_1..wall_4). The maths is in scale.walls_from_views."""
-    door_cm = config.LOCALES[sweep.country][3]
+    door_cm = config.LOCALES[sweep.country]["door_cm"]
     views, frames_used = [], {}
     for f in scanned_frames(sweep):
         if not f.segment.startswith("wall_"):

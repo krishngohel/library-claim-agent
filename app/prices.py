@@ -29,7 +29,7 @@ def _currency_of(price_text: str) -> str:
 async def shopping_offers(sweep, query: str, country: str) -> list[dict]:
     if not config.SERPAPI_KEY:
         return []
-    currency, gl, _, _ = config.LOCALES[country]
+    currency, gl = config.LOCALES[country]["currency"], config.LOCALES[country]["google"]
     params = {"engine": "google_shopping", "q": query, "gl": gl, "hl": "en", "api_key": config.SERPAPI_KEY}
     data, retrieved_at = await get_json("https://serpapi.com/search.json", params)
     sweep.usage["serpapi"] += 1
@@ -71,7 +71,7 @@ async def ebay_offers(sweep, query: str, country: str, condition: str) -> list[d
     """Fixed-price eBay listings in one condition ("NEW" or "USED") on the country's marketplace."""
     if not (config.EBAY_CLIENT_ID and config.EBAY_CLIENT_SECRET):
         return []
-    currency, _, marketplace, _ = config.LOCALES[country]
+    currency, marketplace = config.LOCALES[country]["currency"], config.LOCALES[country]["ebay"]
     try:
         token = await _ebay_token()
     except httpx.HTTPError:

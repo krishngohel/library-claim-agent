@@ -35,12 +35,11 @@ EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET", "")
 # Locale. Changing these two lines is all it takes to price for another country.
 COUNTRY = os.getenv("COUNTRY", "US")
 CURRENCY = os.getenv("CURRENCY", "USD")
-LOCALES = {
-    # country: (currency, google "gl" code, eBay marketplace, standard interior door height cm)
-    "US": ("USD", "us", "EBAY_US", 203.2),   # 80 in
-    "GB": ("GBP", "uk", "EBAY_GB", 198.1),   # 78 in (UK standard 1981 mm)
-    "CA": ("CAD", "ca", "EBAY_CA", 203.2),
-    "AU": ("AUD", "au", "EBAY_AU", 204.0),
+LOCALES = {   # door_cm = standard interior door height, the room's scale reference
+    "US": {"currency": "USD", "google": "us", "ebay": "EBAY_US", "door_cm": 203.2},   # 80 in
+    "GB": {"currency": "GBP", "google": "uk", "ebay": "EBAY_GB", "door_cm": 198.1},   # 1981 mm
+    "CA": {"currency": "CAD", "google": "ca", "ebay": "EBAY_CA", "door_cm": 203.2},
+    "AU": {"currency": "AUD", "google": "au", "ebay": "EBAY_AU", "door_cm": 204.0},
 }
 
 # Anything priced above this (in local currency) goes to a human appraiser instead.

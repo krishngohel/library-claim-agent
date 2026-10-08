@@ -121,7 +121,7 @@ class Connection:
         elif name == "set_locale":
             country = str(args.get("country", "")).upper()
             if country in config.LOCALES:
-                self.sweep.country, self.sweep.currency = country, config.LOCALES[country][0]
+                self.sweep.country, self.sweep.currency = country, config.LOCALES[country]["currency"]
                 result = {"country": country, "currency": self.sweep.currency}
             else:
                 result = {"error": f"unsupported country; supported: {list(config.LOCALES)}"}

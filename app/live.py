@@ -1,4 +1,4 @@
-"""Gemini Live setup: the system prompt and the four tools the voice agent can call.
+"""The voice agent's prompt and its four tools, shared by both agents (app/agents.py).
 
 The voice agent's job is to direct the camera and keep the user informed. It does not
 count, measure or price anything itself; the server does that from saved frames and
@@ -49,53 +49,38 @@ Finish:
 """.strip()
 
 
-def _string(description: str, enum: list[str] | None = None) -> types.Schema:
-    return types.Schema(type=types.Type.STRING, description=description, enum=enum)
+# The four tools, as plain JSON schemas. Claude uses them as-is; Gemini Live wraps them (gemini_live_config).
+TOOLS = [
+    {"name": "set_segment",
+     "description": "Tell the inventory system what the camera is pointed at now, so frames are filed correctly.",
+     "input_schema": {"type": "object", "required": ["kind", "label"], "properties": {
+         "kind": {"type": "string", "enum": ["wall", "shelf"],
+                  "description": "wall = whole wall view, shelf = close pass along a shelving unit"},
+         "label": {"type": "string", "description": "Wall number 1-4, or shelf letter A, B, C ..."}}}},
+    {"name": "record_statement",
+     "description": "Record something the policyholder said that the camera cannot show.",
+     "input_schema": {"type": "object", "required": ["kind", "about", "quote"], "properties": {
+         "kind": {"type": "string", "enum": ["first_edition", "signed", "rare", "is_print", "is_original",
+                                             "skip_current_segment", "other"]},
+         "about": {"type": "string", "description": "Book title, item description or art id (ART2) it is about. "
+                                                    "Empty for skip_current_segment."},
+         "quote": {"type": "string", "description": "What the user said, close to their words"}}}},
+    {"name": "set_locale",
+     "description": "Change the policyholder's country. Currency follows the country.",
+     "input_schema": {"type": "object", "required": ["country"], "properties": {
+         "country": {"type": "string", "enum": list(config.LOCALES)}}}},
+    {"name": "end_sweep",
+     "description": "The user says they are finished. Checks coverage, then builds the claim packet.",
+     "input_schema": {"type": "object", "properties": {
+         "force": {"type": "boolean", "description": "true = build the packet even if there are gaps"}}}},
+]
 
 
-def tools() -> list[types.Tool]:
-    set_segment = types.FunctionDeclaration(
-        name="set_segment",
-        description="Tell the inventory system what the camera is pointed at now, so frames are filed correctly.",
-        behavior=types.Behavior.NON_BLOCKING,
-        parameters=types.Schema(type=types.Type.OBJECT, required=["kind", "label"], properties={
-            "kind": _string("wall = whole wall view, shelf = close pass along a shelving unit", ["wall", "shelf"]),
-            "label": _string("Wall number 1-4, or shelf letter A, B, C ..."),
-        }),
-    )
-    record_statement = types.FunctionDeclaration(
-        name="record_statement",
-        description="Record something the policyholder said that the camera cannot show.",
-        behavior=types.Behavior.NON_BLOCKING,
-        parameters=types.Schema(type=types.Type.OBJECT, required=["kind", "about", "quote"], properties={
-            "kind": _string("Type of statement", ["first_edition", "signed", "rare", "is_print", "is_original",
-                                                   "skip_current_segment", "other"]),
-            "about": _string("Which book title or item description it is about, e.g. 'The Hobbit' or 'oil "
-                             "painting above the desk'. Empty for skip_current_segment."),
-            "quote": _string("What the user said, close to their words"),
-        }),
-    )
-    set_locale = types.FunctionDeclaration(
-        name="set_locale",
-        description="Change the policyholder's country. Currency follows the country.",
-        behavior=types.Behavior.NON_BLOCKING,
-        parameters=types.Schema(type=types.Type.OBJECT, required=["country"], properties={
-            "country": _string("Two-letter country code", list(config.LOCALES)),
-        }),
-    )
-    end_sweep = types.FunctionDeclaration(
-        name="end_sweep",
-        description="The user says they are finished. Checks coverage, then builds the claim packet.",
-        behavior=types.Behavior.NON_BLOCKING,
-        parameters=types.Schema(type=types.Type.OBJECT, properties={
-            "force": types.Schema(type=types.Type.BOOLEAN,
-                                  description="true = build the packet even if there are gaps"),
-        }),
-    )
-    return [types.Tool(function_declarations=[set_segment, record_statement, set_locale, end_sweep])]
-
-
-def live_config(country: str, currency: str) -> types.LiveConnectConfig:
+def gemini_live_config(country: str, currency: str) -> types.LiveConnectConfig:
+    tools = [types.FunctionDeclaration(name=t["name"], description=t["description"],
+                                       parameters_json_schema=t["input_schema"],
+                                       behavior=types.Behavior.NON_BLOCKING)   # keep talking while tools run
+             for t in TOOLS]
     return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
         system_instruction=SYSTEM_PROMPT.format(country=country, currency=currency),
@@ -107,5 +92,5 @@ def live_config(country: str, currency: str) -> types.LiveConnectConfig:
             activity_handling=types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS),   # user can talk over it
         # Audio+video sessions are cut off after ~2 minutes without this; a sliding window keeps it going.
         context_window_compression=types.ContextWindowCompressionConfig(sliding_window=types.SlidingWindow()),
-        tools=tools(),
+        tools=[types.Tool(function_declarations=tools)],
     )

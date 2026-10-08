@@ -84,12 +84,6 @@ def item_cm(box: list[int], px_per_cm: float, img_w: int, img_h: int) -> dict:
     return {"w": round(w_px / px_per_cm, 1), "h": round(h_px / px_per_cm, 1), "d": None}
 
 
-def wall_cm(wall_box: list[int], px_per_cm: float, img_w: int, img_h: int) -> tuple[float, float]:
-    """(wall width cm, wall height cm) from a straight-on full-wall frame."""
-    h_px, w_px = box_px(wall_box, img_w, img_h)
-    return w_px / px_per_cm, h_px / px_per_cm
-
-
 def plausible_wall_box(box: list[int] | None) -> bool:
     """Reject boxes the model sometimes returns that cannot be a wall: empty, tiny, or exactly the whole frame."""
     if not box:

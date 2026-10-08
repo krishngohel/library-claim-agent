@@ -173,6 +173,16 @@ async def scan_frame(sweep, frame) -> dict:
 
 # Merge calls refer to frames by number (1, 2, 3 ...), never by file name: models tend to shorten
 # long names like "f0026.jpg@38.5s", and a pick that points at no frame has to be thrown away.
+def valid_picks(sweep, frames: list, picks: list[tuple[int, int]], field: str) -> list[tuple[int, int]]:
+    """Keep the (frame number, index) picks that point at a real detection, each once."""
+    out = []
+    for frame_no, index in picks:
+        real_frame = 1 <= frame_no <= len(frames)
+        if real_frame and 0 <= index < len(sweep.scans[frames[frame_no - 1].ref][field]) and (frame_no, index) not in out:
+            out.append((frame_no, index))
+    return out
+
+
 class BookPick(BaseModel):
     frame: int = Field(description="Frame number")
     spine_index: int
@@ -204,16 +214,10 @@ async def consolidate_shelf(sweep, shelf: str, frames: list) -> list[dict]:
         "fully visible). Do not add books that are not in the list."
     )
     result: ShelfBooks = await _generate(sweep, parts, ShelfBooks, prompt)
-    valid, seen = [], set()
-    for pick in result.books:
-        if not 1 <= pick.frame <= len(frames) or (pick.frame, pick.spine_index) in seen:
-            continue   # drop picks that point at no frame, and duplicates
-        f = frames[pick.frame - 1]
-        spines = sweep.scans[f.ref]["spines"]
-        if 0 <= pick.spine_index < len(spines):
-            seen.add((pick.frame, pick.spine_index))
-            valid.append({**spines[pick.spine_index], "frame_ref": f.ref, "row": pick.row})
-    return valid
+    rows = {(p.frame, p.spine_index): p.row for p in result.books}
+    picks = valid_picks(sweep, frames, list(rows), "spines")
+    return [{**sweep.scans[frames[n - 1].ref]["spines"][i], "frame_ref": frames[n - 1].ref, "row": rows[(n, i)]}
+            for n, i in picks]
 
 
 class ItemPick(BaseModel):
@@ -241,16 +245,8 @@ async def consolidate_items(sweep, frames: list) -> list[dict]:
         "frame where it is most fully visible and most straight-on. Two similar objects side by side are two objects."
     )
     result: RoomItems = await _generate(sweep, parts, RoomItems, prompt)
-    out, seen = [], set()
-    for pick in result.items:
-        if not 1 <= pick.frame <= len(frames) or (pick.frame, pick.item_index) in seen:
-            continue
-        f = frames[pick.frame - 1]
-        items = sweep.scans[f.ref]["items"]
-        if 0 <= pick.item_index < len(items):
-            seen.add((pick.frame, pick.item_index))
-            out.append({**items[pick.item_index], "frame_ref": f.ref})
-    return out
+    picks = valid_picks(sweep, frames, [(p.frame, p.item_index) for p in result.items], "items")
+    return [{**sweep.scans[frames[n - 1].ref]["items"][i], "frame_ref": frames[n - 1].ref} for n, i in picks]
 
 
 async def gather_limited(coros, limit: int = 6):
