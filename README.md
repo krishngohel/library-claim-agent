@@ -147,8 +147,8 @@ See `ARCHITECTURE.md` for the pipeline diagram, scale and price sources.
 
 ## The reference app: what I kept, changed and threw away
 
-I read all of the reference app's code ([Insurance Claim Live Agent Team](https://github.com/Shubhamsaboo/awesome-llm-apps/tree/main/voice_ai_agents/insurance_claim_live_agent_team))
-before writing this one. I have not run it yet, because it needs a Google API key.
+I ran the reference app ([Insurance Claim Live Agent Team](https://github.com/Shubhamsaboo/awesome-llm-apps/tree/main/voice_ai_agents/insurance_claim_live_agent_team))
+and read all of it before writing this.
 
 **Kept**
 - The transport: browser PCM16 mic audio at 16 kHz, JPEG camera frames, and 24 kHz PCM playback, all
