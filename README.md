@@ -56,6 +56,7 @@ with synthetic camera frames (4 walls, 2 bookcases) and typed speech:
 ```bash
 python -m scripts.smoke_test
 python -m eval.evaluate sweeps/<id>/claim_packet.json eval/smoke_ground_truth
+python -m tests.contract sweeps/<id>/claim_packet.json      # checks the brief's output contract field by field
 ```
 
 ## Doing a sweep

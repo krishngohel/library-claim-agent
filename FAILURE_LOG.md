@@ -87,6 +87,18 @@ log above.
   = perimeter × ceiling height. With two more weeks: find the ceiling and floor lines with an edge detector
   (Hough lines) instead of the model's box.
 
+### D. Requirement checks: bugs found by the contract and pricing-flow tests
+- **A book flagged for appraisal still carried its price.** Books listed above `APPRAISAL_THRESHOLD` were
+  marked `needs_appraisal` but kept the amount, which breaks "do not auto-price these". Found by
+  `tests/test_pricing_flow.py`. Now the amount is blank and the listings go in `listings_seen` as evidence.
+- **Re-filming a shelf kept the old merge.** If the agent asked for a re-capture and the user went back to a
+  shelf, the earlier result was reused. Entering a shelf now discards its old merge.
+- **Long shelves could lose books.** Only 10 frames per shelf went to the merge. A 60 s pass makes about
+  24 scans, so books between the chosen frames were never seen. The cap is now 24 (`SHELF_MERGE_MAX_FRAMES`).
+- **Shelved wall area measured from close-ups.** A close-up shows part of a bookcase, so its area was too
+  small. Merging now keeps the whole-wall sighting for measurement, and objects in a wall view get scale
+  from the wall's own floor-to-ceiling height.
+
 ### Smoke-test cost and latency (Claude mode, measured)
 - Total model cost per 3-minute sweep: **$0.027** (Claude Haiku 5.5: agent turns + about 20 frame scans + merges)
 - Sweep end to packet: **7–13 s** (books_consolidate 3.6 s, books_identify 0.1 s with cache / 2.4 s cold,

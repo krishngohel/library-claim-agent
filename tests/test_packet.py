@@ -73,7 +73,7 @@ def test_bookcase_seen_in_wall_view_and_closeup_is_one_object():
     other = {**close, "segment": "shelf_B"}
     merged = merge_across_segments([wide, close, other])
     assert len(merged) == 2                       # shelf_A and shelf_B are different units
-    assert merged[0]["segment"] == "shelf_A"      # the fuller view was kept
+    assert merged[0]["segment"] == "wall_2"       # the whole-wall view is kept: it shows the whole bookcase
 
 
 def test_adjacent_walls_merge_only_corner_objects():

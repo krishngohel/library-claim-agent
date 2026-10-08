@@ -52,7 +52,7 @@ def shelf_segments(sweep) -> list[str]:
 async def consolidate_all_shelves(sweep) -> None:
     todo = [s for s in shelf_segments(sweep) if s not in sweep.shelf_books]
     results = await vision.gather_limited(
-        [vision.consolidate_shelf(sweep, s, spread(scanned_frames(sweep, s), 10)) for s in todo])
+        [vision.consolidate_shelf(sweep, s, spread(scanned_frames(sweep, s), config.SHELF_MERGE_MAX_FRAMES)) for s in todo])
     sweep.shelf_books.update(dict(zip(todo, results)))
 
 
@@ -115,17 +115,22 @@ def measure_books(sweep, books: list[dict]) -> None:
                 b["spine_height_cm"], b["spine_thickness_cm"] = scale.spine_cm(b, px, w, h)
 
 
-def measure_items(sweep, items: list[dict]) -> None:
+def measure_items(sweep, items: list[dict], ceiling_m: float | None) -> None:
+    """Item size from its chosen frame. Scale: a reference object in that frame; else, in a whole-wall view,
+    the wall's own floor-to-ceiling height (the measured ceiling height, the same on every wall)."""
     door_cm = config.LOCALES[sweep.country][3]
     for it in items:
         frame = sweep.frame(it["frame_ref"])
         px, method = frame_scale(sweep, frame, door_cm, {})
         w, h = image_size(frame)
+        wall_box = sweep.scans[frame.ref]["wall_box"]
+        if not px and ceiling_m and frame.segment.startswith("wall_") and scale.plausible_wall_box(wall_box):
+            px, method = scale.box_px(wall_box, w, h)[0] / (ceiling_m * 100), "wall_height_from_ceiling"
         it["dimensions_cm"] = scale.item_cm(it["box_2d"], px, w, h) if px else {"w": None, "h": None, "d": None}
         it["scale_method"] = method
 
 
-def measure_room(sweep, items: list[dict]) -> dict:
+def measure_room(sweep) -> dict:
     """Room size from the whole-wall frames (segments wall_1..wall_4). The maths is in scale.walls_from_views."""
     door_cm = config.LOCALES[sweep.country][3]
     views, frames_used = [], {}
@@ -142,20 +147,26 @@ def measure_room(sweep, items: list[dict]) -> dict:
 
     per_wall, ceiling = scale.walls_from_views(views, door_cm)
     room = scale.room_from_walls(per_wall)
-    shelving = [i for i in items if i["category"] == "shelving" and i["dimensions_cm"]["w"]]
-    # Shelving front area = wall area it covers. Units without scale are left out (and queued).
-    shelved = sum(i["dimensions_cm"]["w"] * i["dimensions_cm"]["h"] for i in shelving) / 10000
     room.update(
-        shelved_wall_area_m2=round(shelved, 2),
+        ceiling_m=ceiling,
         floor_area_ft2=scale.m2_to_ft2(room["floor_area_m2"]) if room["floor_area_m2"] else None,
         wall_area_ft2=scale.m2_to_ft2(room["wall_area_m2"]) if room["wall_area_m2"] else None,
-        shelved_wall_area_ft2=scale.m2_to_ft2(shelved),
         scale_method=(f"ceiling height from door(s) = {door_cm} cm ({sweep.country} standard), median over "
                       f"{sum(1 for v in views if v['door_box'])} door views; each wall's width = its width:height "
                       "ratio x ceiling height") if ceiling else "none: no door seen in a whole-wall view",
         wall_frames=frames_used,
     )
     return room
+
+
+def add_shelved_area(room: dict, items: list[dict]) -> None:
+    """Wall area covered by shelving = summed front area of the bookcases. Units without a size are
+    listed so the adjuster can see the figure is a lower bound."""
+    shelving = [i for i in items if i["category"] == "shelving"]
+    sized = [i for i in shelving if i["dimensions_cm"]["w"]]
+    shelved = sum(i["dimensions_cm"]["w"] * i["dimensions_cm"]["h"] for i in sized) / 10000
+    room.update(shelved_wall_area_m2=round(shelved, 2), shelved_wall_area_ft2=scale.m2_to_ft2(shelved),
+                shelving_units_without_size=[i["frame_ref"] for i in shelving if not i["dimensions_cm"]["w"]])
 
 
 async def consolidate_items(sweep) -> list[dict]:
@@ -194,15 +205,36 @@ def could_be_same_object(a: dict, b: dict) -> bool:
     return sa.startswith("wall_") != sb.startswith("wall_")
 
 
+def better_view(a: dict, b: dict) -> bool:
+    """Is sighting a better for measuring than b? A whole-wall view shows the whole object (a close-up of a
+    bookcase shows only part of it); between two views of the same kind, the bigger box shows more detail."""
+    a_wall, b_wall = a["segment"].startswith("wall_"), b["segment"].startswith("wall_")
+    if a_wall != b_wall:
+        return a_wall
+    return scale.box_area(a["box_2d"]) > scale.box_area(b["box_2d"])
+
+
 def merge_across_segments(sightings: list[dict]) -> list[dict]:
-    merged: list[dict] = []
+    """Greedy merge. Each object remembers every sighting it absorbed, and a new sighting joins it only
+    if it could be the same object as *all* of them (so one bookcase seen in a wall view cannot absorb
+    the close-ups of two different shelves)."""
+    groups: list[list[dict]] = []
     for item in sightings:
-        match = next((m for m in merged if m["category"] == item["category"] and could_be_same_object(m, item)
-                      and fuzz.token_set_ratio(m["description"].lower(), item["description"].lower()) >= 60), None)
-        if match is None:
-            merged.append(item)
-        elif scale.box_area(item["box_2d"]) > scale.box_area(match["box_2d"]):   # keep the fuller view
-            merged[merged.index(match)] = {**item, "art_id": item.get("art_id") or match.get("art_id", "")}
+        group = next((g for g in groups if g[0]["category"] == item["category"]
+                      and all(could_be_same_object(seen, item) for seen in g)
+                      and fuzz.token_set_ratio(g[0]["description"].lower(), item["description"].lower()) >= 60), None)
+        if group is None:
+            groups.append([item])
+        else:
+            group.append(item)
+    merged = []
+    for g in groups:
+        best = g[0]
+        for seen in g[1:]:
+            if better_view(seen, best):
+                best = seen
+        art_id = next((s["art_id"] for s in g if s.get("art_id")), "")
+        merged.append({**best, "art_id": art_id})
     return merged
 
 
@@ -228,7 +260,11 @@ async def price_books(sweep, books: list[dict], country: str, currency: str) -> 
             return b
         b["replacement_cost"], b["used_value"] = await valuation.price_book(sweep, b, country, currency)
         if valuation.over_threshold(b["replacement_cost"], b["used_value"]):
+            # Valuable books go to a human appraiser, not into the totals. Keep what we saw as evidence only.
             b["appraisal_reasons"].append(f"listed above the {config.APPRAISAL_THRESHOLD:.0f} {currency} threshold")
+            b["listings_seen"] = [p for p in (b["replacement_cost"], b["used_value"]) if p["amount"] is not None]
+            b["replacement_cost"] = {**b["replacement_cost"], "amount": None}
+            b["used_value"] = {**b["used_value"], "amount": None}
         return b
 
     return await vision.gather_limited([one(b) for b in books], limit=6)
@@ -250,7 +286,7 @@ def to_packet_book(b: dict, n: int) -> dict:
         "spine_height_cm": b["spine_height_cm"], "spine_thickness_cm": b["spine_thickness_cm"],
         "scale_method": b["scale_method"], "orientation": b["orientation"],
         "id_confidence": confidence if b["title"] else 0,
-        "appraisal_reasons": b["appraisal_reasons"],
+        "appraisal_reasons": b["appraisal_reasons"], "listings_seen": b.get("listings_seen", []),
         "replacement_cost": b["replacement_cost"], "used_value": b["used_value"],
     }
 
@@ -298,8 +334,9 @@ async def finish_sweep(sweep, country: str | None = None, currency: str | None =
         items = await consolidate_items(sweep)
     with timed(sweep, "measure"):
         measure_books(sweep, books)
-        measure_items(sweep, items)
-        room = measure_room(sweep, items)
+        room = measure_room(sweep)
+        measure_items(sweep, items, room["ceiling_m"])
+        add_shelved_area(room, items)
     sweep.log("measured", {"room": room, "items": items})
     with timed(sweep, "price"):
         priced_books = await price_books(sweep, books, country, currency)

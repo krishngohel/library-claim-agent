@@ -122,6 +122,8 @@ class Connection:
         label = str(args.get("label", "")).strip().upper()
         new = f"wall_{label}" if args.get("kind") == "wall" else f"shelf_{label}"
         self.sweep.current_segment = new
+        if new.startswith("shelf_"):
+            self.sweep.shelf_books.pop(new, None)   # re-filming a shelf: its old merge is out of date
         if previous.startswith("shelf_") and previous != new:
             self.spawn(self.close_shelf(previous))   # merge the finished shelf while they keep walking
         self.spawn(self.send(type="segment", segment=new))
@@ -138,7 +140,7 @@ class Connection:
         return {"recorded": True}
 
     async def close_shelf(self, shelf: str):
-        frames = pipeline.spread(pipeline.scanned_frames(self.sweep, shelf), 10)
+        frames = pipeline.spread(pipeline.scanned_frames(self.sweep, shelf), config.SHELF_MERGE_MAX_FRAMES)
         if not frames or shelf in self.sweep.skipped_segments:
             return
         books = await vision.consolidate_shelf(self.sweep, shelf, frames)
@@ -304,6 +306,11 @@ async def live_socket(ws: WebSocket):
         await ws.close(code=1008)
         return
     await ws.accept()
+    missing = config.missing_keys()
+    if missing:
+        await ws.send_json({"type": "error", "message": missing})
+        await ws.close()
+        return
     conn = Connection(ws)
     conn.agent = make_agent(conn)
     await conn.send(type="sweep", id=conn.sweep.id, browser_voice=conn.agent.browser_voice,

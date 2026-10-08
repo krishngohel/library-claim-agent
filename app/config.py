@@ -66,6 +66,16 @@ STANDARD_BOOK_HEIGHT_CM = float(os.getenv("STANDARD_BOOK_HEIGHT_CM", "23.0"))
 BLUR_THRESHOLD = 60.0     # variance of Laplacian below this = blurry
 GLARE_THRESHOLD = 0.05    # more than 5% clipped-white pixels = glare
 
+def missing_keys() -> str:
+    """A message naming the key the chosen providers need, or "" if all are present."""
+    needs = {"gemini": ("GOOGLE_API_KEY", GOOGLE_API_KEY), "claude": ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)}
+    for provider in (AGENT_PROVIDER, VISION_PROVIDER):
+        name, value = needs.get(provider, (f"a valid provider (not '{provider}')", ""))
+        if not value:
+            return f"Missing {name} in .env. Set GOOGLE_API_KEY (free at aistudio.google.com) or ANTHROPIC_API_KEY."
+    return ""
+
+
 # Unit prices for the cost-per-sweep figure. Check the providers' pricing pages and update.
 PRICE_VISION_IN = float(os.getenv("PRICE_VISION_IN", "0.30"))     # USD per 1M input tokens
 PRICE_VISION_OUT = float(os.getenv("PRICE_VISION_OUT", "2.50"))   # USD per 1M output tokens
@@ -75,4 +85,7 @@ PRICE_CLAUDE_IN = float(os.getenv("PRICE_CLAUDE_IN", "0.10"))     # Claude Haiku
 PRICE_CLAUDE_OUT = float(os.getenv("PRICE_CLAUDE_OUT", "0.50"))   # USD per 1M output tokens
 PRICE_SERPAPI_CALL = float(os.getenv("PRICE_SERPAPI_CALL", "0.015"))
 
-SCAN_EVERY_SECONDS = 2.5  # how often a sharp frame is sent to the vision model during the sweep
+SCAN_EVERY_SECONDS = 2.5
+# Frames given to the model when merging one shelf. A 60 s shelf pass gives ~24 scans; using fewer
+# would leave gaps between frames and miss books.
+SHELF_MERGE_MAX_FRAMES = 24  # how often a sharp frame is sent to the vision model during the sweep
