@@ -5,7 +5,18 @@ to it while filming on your phone. It tells you when to slow down or step closer
 inventory as you go. When you finish, it produces a claim packet: every book read from its spine,
 measured and priced; every other item priced; and the room's floor and wall area.
 
-## Run it (about 10 minutes)
+## Submission contents
+
+| Deliverable (from the brief) | Where it is |
+| --- | --- |
+| 1. Repository, runnable from this README in under 15 minutes | This repo. `.env.example` is included and no secrets are committed |
+| 2. Demo video: one unedited take, 6 minutes or less | _link to be added_ |
+| 3. Claim packet from the video sweep, plus the frames it references | `submission/claim_packet/` (`claim_packet.json`, `report.html`, `frames/`) |
+| 4. Ground truth and results against each pass bar | `eval/ground_truth/` (hand-collected sheets) and `submission/results.md` |
+| 5. Architecture note | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| 6. Failure log, cost per sweep and latency per stage | [`FAILURE_LOG.md`](FAILURE_LOG.md) |
+
+## Run it (about 10 minutes, plus key sign-ups)
 
 Requires Python 3.11+ and either a Google AI Studio key (free, no card) or an Anthropic key.
 
@@ -33,7 +44,7 @@ on iPhone (Safari) and Android (Chrome) with no app install.
 | Keys present | Voice | Frame reading | Cost per 3-min sweep |
 | --- | --- | --- | --- |
 | `GOOGLE_API_KEY` | Gemini Live: real-time audio both ways; the agent also watches the video | Gemini Flash | free tier |
-| `ANTHROPIC_API_KEY` only | The phone's built-in speech recognition and voice (Chrome on Android/desktop, Safari on iPhone); Claude Haiku 5.5 decides what to say and calls the tools | Claude Haiku 5.5 | about $0.03 (measured) |
+| `ANTHROPIC_API_KEY` only | The phone's built-in speech recognition and voice (Chrome on Android/desktop, Safari on iPhone); Claude Haiku 5.5 decides what to say and calls the tools | Claude Haiku 5.5 | $0.02-0.03 (measured) |
 
 Force a mode with `AGENT_PROVIDER` and `VISION_PROVIDER` (`gemini` or `claude`). In the Claude mode the agent
 does not watch the video itself; it hears what the camera shows from the vision scans, every 2.5 s.
@@ -50,7 +61,7 @@ system never fills in a price itself.
 python -m pytest -q
 ```
 
-**Smoke test** (real model calls, about $0.03 in Claude mode). Start the server, then drive it like a phone
+**Smoke test** (real model calls, $0.02-0.03 in Claude mode). Start the server, then drive it like a phone
 with synthetic camera frames (4 walls, 2 bookcases) and typed speech:
 
 ```bash
@@ -67,6 +78,7 @@ python -m tests.contract sweeps/<id>/claim_packet.json      # checks the brief's
 3. Walk along each bookcase about an arm's length away, top row to bottom. The agent files these as
    `shelf_A`, `shelf_B`, and so on, and logs each shelf as you leave it.
 4. Optional, but it improves scale: put a sheet of US Letter or A4 paper, or a credit card, on a shelf.
+   Keep people and documents with personal data out of the frame.
 5. Say "I'm done". The agent checks for gaps (a wall not filmed, a shelf with many unreadable spines),
    asks you to re-film those, then builds the packet and reads back a summary.
 
@@ -88,30 +100,55 @@ python -m eval.evaluate sweeps/<id>/claim_packet.json eval/ground_truth   # scor
 
 Copy `eval/ground_truth_template/` to `eval/ground_truth/` and fill it in from your own room before tuning.
 
+**Packaging the submission.** `sweeps/` is not committed (it holds every test run). For the sweep recorded
+in the video, copy its folder into the repo and score it:
+
+```bash
+mkdir -p submission && cp -r sweeps/<id> submission/claim_packet
+python -m eval.evaluate submission/claim_packet/claim_packet.json eval/ground_truth   # writes results.md beside it
+mv submission/claim_packet/results.md submission/results.md
+python -m scripts.second_country <id> GB && cp sweeps/<id>/locale_comparison.* submission/
+```
+
+## Measurement, prices, cost and latency
+
+- **Metric scale** comes from objects of known size seen in the same frame: a standard interior door
+  (203.2 cm US / 198.1 cm UK), US Letter or A4 paper, a credit card, or an outlet plate. After that come
+  catalogued book heights, then standard book formats as a flagged last resort. The model never estimates
+  a size. Details: [`ARCHITECTURE.md`](ARCHITECTURE.md#where-metric-scale-comes-from).
+- **Prices** come only from real listings (eBay Browse API, optionally Google Shopping via SerpAPI). Each
+  one carries its URL, its retrieval date and the condition assumed. Totals are computed in code from the
+  lines. Details: [`ARCHITECTURE.md`](ARCHITECTURE.md#where-prices-come-from).
+- **Cost per sweep and latency per stage** are written into every packet under `metrics`
+  (`cost_usd`, `stage_seconds`), and summarised in [`FAILURE_LOG.md`](FAILURE_LOG.md).
+
 ## Code map
 
 | File | What it does |
 | --- | --- |
-| `app/server.py` | WebSocket bridge between the phone and Gemini Live, tool calls, and a live scan every 2.5 s |
+| `app/server.py` | WebSocket bridge between the phone and the voice agent, the tools, frame checks, live scans, coverage check |
 | `app/live.py` | The voice agent's prompt and its 4 tools: `set_segment`, `record_statement`, `set_locale`, `end_sweep` |
 | `app/agents.py` | The two interchangeable agents: Gemini Live, or Claude with the phone's own speech |
 | `app/quality.py` | Blur and glare check on every frame, using OpenCV |
 | `app/vision.py` | The only vision-model calls (Gemini or Claude): scan a frame, merge a shelf's frames, merge the room's items |
 | `app/scale.py` | Pixels to centimetres, and room geometry. Pure math |
 | `app/catalog.py` | Spine text to an Open Library record |
-| `app/prices.py` | Google Shopping (SerpAPI), eBay used listings, ECB exchange rates |
+| `app/prices.py` | eBay new and used listings, Google Shopping (SerpAPI, optional), ECB exchange rates |
 | `app/valuation.py` | Pricing rules: median real listing, labelled conversion, appraisal flags |
 | `app/packet.py` | Totals and review queue, computed in code |
 | `app/pipeline.py` | Runs the post-sweep stages in order, timing each one |
 | `app/report.py` | The HTML report |
 | `web/` | Phone page: mic, camera, voice playback, live inventory |
+| `eval/evaluate.py` | Scores a packet against the ground-truth sheets, one row per pass bar |
+| `tests/` | Unit and pipeline tests; `tests/contract.py` checks a packet against the output contract |
+| `scripts/` | `smoke_test.py` (drive the server like a phone), `replay.py`, `second_country.py` |
 
 See `ARCHITECTURE.md` for the pipeline diagram, scale and price sources.
 
 ## The reference app: what I kept, changed and threw away
 
-I ran the reference app ([Insurance Claim Live Agent Team](https://github.com/Shubhamsaboo/awesome-llm-apps/tree/main/voice_ai_agents/insurance_claim_live_agent_team))
-and read all of it before writing this.
+I read all of the reference app's code ([Insurance Claim Live Agent Team](https://github.com/Shubhamsaboo/awesome-llm-apps/tree/main/voice_ai_agents/insurance_claim_live_agent_team))
+before writing this one. I have not run it yet, because it needs a Google API key.
 
 **Kept**
 - The transport: browser PCM16 mic audio at 16 kHz, JPEG camera frames, and 24 kHz PCM playback, all
@@ -147,13 +184,14 @@ and read all of it before writing this.
 - **Appraisal:** a book goes to appraisal if the binding looks antiquarian or signed, if the user says
   it is a first edition, signed or rare, or if any listing is above `APPRAISAL_THRESHOLD`
   (default 150). Art and portraits always go to appraisal unless the user says it is a print.
-- **Room shape:** walls 1 and 3 face each other, as do 2 and 4. If opposite walls differ by more
-  than 15%, the room is flagged as possibly non-rectangular and the mean is used. Wall area is gross
-  (doors and windows not subtracted). "Shelved wall area" is the summed front area of detected shelving.
+- **Room shape:** the sweep expects four walls, numbered clockwise from the door; walls 1 and 3 face each
+  other, as do 2 and 4. An L-shaped or angled room shows up as opposite walls that differ by more than
+  15%: the packet reports the mean, lowers the confidence and puts the room in the review queue rather
+  than guessing a shape. Wall area is gross (doors and windows not subtracted). "Shelved wall area" is the
+  summed front area of the bookcases, measured from the whole-wall views.
 - **Item depth** can't be seen from the front, so it is reported as `null`, meaning unknown.
-- **Room shape:** the sweep expects four walls, numbered clockwise from the door. An L-shaped or angled room
-  shows up as opposite walls that disagree. The packet then reports the mean, lowers the confidence and puts
-  the room in the review queue rather than guessing a shape.
+- **Locale:** the policyholder's country is a setting (`COUNTRY` in `.env`, or said to the agent at the
+  start). Supported: US, GB, CA, AU.
 
 ## Tools used
 
@@ -162,4 +200,5 @@ and read all of it before writing this.
   (`claude-haiku-5-5`, `VISION_PROVIDER=claude`) for spine reading and object detection.
 - Open Library (catalogue), SerpAPI Google Shopping, eBay Browse API, frankfurter.dev (ECB rates).
 - OpenCV (blur and glare), RapidFuzz (fuzzy title matching), FastAPI.
+- No model was trained or fine-tuned; everything uses pretrained models through their APIs.
 - Claude Code helped write the code.
