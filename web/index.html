@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Library Claim Sweep</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <button id="start">Start sweep</button>
+    <span id="status">Not connected</span>
+    <span id="segment"></span>
+  </header>
+  <video id="camera" autoplay playsinline muted></video>
+  <form id="say-form"><input id="say" placeholder="Or type to the agent..." autocomplete="off"><button>Send</button></form>
+  <section id="notices"></section>
+  <section>
+    <h2>Inventory <small id="count"></small></h2>
+    <div id="shelves"></div>
+    <div id="items"></div>
+  </section>
+  <section id="packet" hidden></section>
+  <section>
+    <h2>Conversation</h2>
+    <div id="transcript"></div>
+  </section>
+  <script src="/static/app.js"></script>
+</body>
+</html>

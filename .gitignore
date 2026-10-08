@@ -1,0 +1,7 @@
+.venv/
+.env
+.cache/
+sweeps/*
+!sweeps/.gitkeep
+__pycache__/
+.pytest_cache/

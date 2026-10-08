@@ -1,0 +1,3 @@
+shelf,position,title,author,legible
+shelf_A,1,The Hobbit,J.R.R. Tolkien,yes
+shelf_A,2,,,no

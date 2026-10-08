@@ -1,0 +1,19 @@
+body { font: 15px system-ui, sans-serif; margin: 0; padding: 0 16px 40px; background: #fff; color: #111; }
+header { position: sticky; top: 0; background: #fff; padding: 10px 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #ddd; }
+button { font: inherit; padding: 8px 16px; }
+#say-form { display: flex; gap: 8px; margin: 8px 0; }
+#say { flex: 1; font: inherit; padding: 6px; min-width: 0; }
+#segment { font-weight: 600; }
+video { width: 100%; max-height: 40vh; background: #000; margin-top: 8px; object-fit: contain; }
+#notices div { background: #fff4d6; padding: 4px 8px; margin: 4px 0; font-size: 13px; }
+.shelf { border: 1px solid #ddd; padding: 6px 8px; margin: 6px 0; }
+.shelf small { color: #666; }
+#transcript p { margin: 2px 0; }
+.agent { color: #0a4fa8; }
+#packet { background: #e9f7ee; padding: 8px; margin: 8px 0; }
+@media (prefers-color-scheme: dark) {
+  body, header { background: #111; color: #eee; }
+  #notices div { background: #3a3110; }
+  #packet { background: #12301d; }
+  .agent { color: #8cc2ff; }
+}

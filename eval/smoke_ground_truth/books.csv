@@ -1,0 +1,15 @@
+shelf,position,title,author,legible
+shelf_A,1,The Hobbit,,yes
+shelf_A,2,Dune,,yes
+shelf_A,3,Sapiens,,yes
+shelf_A,4,Emma,,yes
+shelf_A,5,,,no
+shelf_A,6,Beloved,,yes
+shelf_A,7,Ulysses,,yes
+shelf_A,8,Walden,,yes
+shelf_B,1,Middlemarch,,yes
+shelf_B,2,Dracula,,yes
+shelf_B,3,,,no
+shelf_B,4,Rebecca,,yes
+shelf_B,5,Ivanhoe,,yes
+shelf_B,6,Babbitt,,yes
