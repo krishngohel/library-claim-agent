@@ -49,11 +49,36 @@ on iPhone (Safari) and Android (Chrome) with no app install.
 Force a mode with `AGENT_PROVIDER` and `VISION_PROVIDER` (`gemini` or `claude`). In the Claude mode the agent
 does not watch the video itself; it hears what the camera shows from the vision scans, every 2.5 s.
 
-**Prices.** New and used prices come from eBay's Browse API, which is free: create a developer account at
-developer.eBay.com, then a Production keyset, and put the two values in `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET`.
-`SERPAPI_KEY` (Google Shopping) is optional and adds retail listings. With no price keys, every price comes
-back as "no listing found": those lines are excluded from the totals and sent to the review queue. The
-system never fills in a price itself.
+**Prices: get your own eBay keys (free, required for prices).** New and used prices come from eBay's
+Browse API. Each person running the app needs their own keys; none are included. Without them the app
+still runs, but every price comes back as "no listing found": those lines are excluded from the totals
+and sent to the review queue. The system never fills in a price itself.
+
+1. Sign up at [developer.ebay.com](https://developer.ebay.com) with **Register**. It's free and needs no
+   card. Confirm your email; eBay can take up to one business day to activate a new developer account.
+2. Open **Application Keysets** at [developer.ebay.com/my/keys](https://developer.ebay.com/my/keys), enter
+   an application title (for example `library-claim-agent`), and click **Create a keyset** under
+   **Production**. Not Sandbox: Sandbox has no real listings.
+3. eBay disables a Production keyset until you deal with marketplace account deletion notifications.
+   On the prompt, choose to **apply for an exemption** and give the reason that this app does not store
+   eBay user data. This app only reads public listings with an application token and stores no user
+   data, so the exemption fits.
+4. Copy the two Production values into `.env`:
+
+   ```dotenv
+   EBAY_CLIENT_ID=<App ID (Client ID)>
+   EBAY_CLIENT_SECRET=<Cert ID (Client Secret)>
+   ```
+
+   The Dev ID is not needed. Keep the Cert ID secret: `.env` is git-ignored.
+5. Check it works by pricing one book (this prints a real listing, its URL and the retrieval date):
+
+   ```bash
+   python -c "import asyncio; from app import valuation; from app.sweep import Sweep; print(asyncio.run(valuation.price_book(Sweep(), {'isbn': '', 'title': 'Dune', 'author': 'Frank Herbert'}, 'US', 'USD')))"
+   ```
+
+The default limit is 5,000 Browse API calls a day; one 60-book sweep uses about 120-250. `SERPAPI_KEY`
+(Google Shopping) is optional and adds retail listings next to eBay's.
 
 **Tests** (no keys needed; models and price APIs are stubbed):
 
